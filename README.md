@@ -14,28 +14,26 @@
 - **可定制的性格**：身份设定写在同目录 `AGENTS.md`，每轮对话实时读取——改完即生效，也能在设置面板里直接编辑
 - **13 个像素动画**（302×207 紧凑画布，不遮挡桌面点击）、交互音效、三档大小、开机自启
 
-## 快速开始
+## 怎么用（3 步开始）
 
-1. 从 [Releases](../../releases) 下载 `ClawdPet.exe`，放进任意文件夹
-2. 在 EXE 同目录创建 `models.json`（或在首次打开聊天窗的设置面板里配置）：
+1. **下载**：从 [Releases](../../releases) 下载 `ClawdPet.exe`，放到一个固定文件夹（比如 `D:\ClawdPet`，以后升级就是覆盖这个文件）
+2. **配置模型**：双击运行它，桌面右下角会出现小螃蟹——**双击螃蟹**打开聊天窗，点右上角**齿轮**，填入你的 AI 服务信息（API 地址、模型名、API Key，任何 OpenAI 兼容服务都行，如 DeepSeek / GLM / Kimi），保存即可。不熟悉 JSON 的用户全程在界面里点选填写，不需要手动建任何文件
+3. **顺手做两件事**：
+   - 右键螃蟹 → **开机自启**，以后开机它就在
+   - 右键 EXE → 发送到 → 桌面快捷方式，不想自启时从桌面打开
+
+懂 JSON 的用户也可以直接在 EXE 同目录放 `models.json`（界面配置写的就是这个文件）和 `AGENTS.md`（自定义它的身份与性格），格式见下：
 
 ```json
 {
   "active": "my-model",
   "models": [
-    {
-      "id": "my-model",
-      "name": "DeepSeek",
-      "baseUrl": "https://api.deepseek.com/v1",
-      "model": "deepseek-flash",
-      "apiKey": "sk-..."
-    }
+    { "id": "my-model", "name": "DeepSeek", "baseUrl": "https://api.deepseek.com/v1", "model": "deepseek-flash", "apiKey": "sk-..." }
   ]
 }
 ```
 
-3. （可选）创建 `AGENTS.md` 定义它的身份与性格
-4. 双击运行。双击螃蟹开聊天，Alt+C 切换聊天窗，Ctrl+Alt+C 显隐宠物
+**日常操作**：双击螃蟹开聊天，Alt+C 收起/展开聊天窗，Ctrl+Alt+C 显示/隐藏螃蟹；单击它会随机做动作，3 分钟不理它就看书，10 分钟就睡着。
 
 ## ⚠️ 安全须知
 
