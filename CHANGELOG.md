@@ -5,8 +5,6 @@
 
 ## [2.0.0] - 2026-09-13
 
-首个公开版本。
-
 ### 新增
 
 - 微型 Agent：聊天即 Agent，`read_file` / `write_file` / `run_command` 三工具，OpenAI 兼容 function calling，多轮全自动（100 轮上限）
