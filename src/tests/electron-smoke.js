@@ -95,7 +95,7 @@ async function run({ app, win, motion, screen, guard, placeWindow, settings, res
     motion.mode = 'air'; motion.vx = motion.vy = 0; announce()
     await waitFor("document.body.dataset.state === 'fly'")
     await evaluate("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
-    assert.ok(motion.body && motion.body.x > 40 && motion.body.y > 80)
+    assert.ok(motion.body && motion.body.x >= 0 && motion.body.x + motion.body.width <= motion.size.width && motion.body.y >= 0 && motion.body.y + motion.body.height <= motion.size.height, JSON.stringify(motion.body))
     for (const side of ['top-left', 'top-right', 'bottom-left', 'bottom-right']) {
       motion.x = side.endsWith('left') ? motion.limits.left : motion.limits.right
       motion.y = side.startsWith('top') ? motion.limits.top : motion.limits.floor

@@ -64,7 +64,7 @@
     if (!meta || !canon) return
     const wanted = BASE_H * settings.scale * meta.rawH / canon.rawH
     const ratio = meta.w / meta.h
-    const h = Math.min(wanted, (innerHeight - 105) / 1.1, (innerWidth - 72) / (ratio * 1.2))
+    const h = Math.min(wanted, innerHeight - 40, (innerWidth - 24) / ratio)
     pet.style.height = Math.max(30, h) + 'px'
     pet.style.width = Math.max(20, h * ratio) + 'px'
     pet.style.imageRendering = 'pixelated'

@@ -11,7 +11,7 @@ const store = require('./lib/settings')
 const ai = require('./lib/ai')
 const models = require('./lib/models')
 
-const WIN_W = 420, WIN_H = 500
+const WIN_W = 500, WIN_H = 400
 const testMode = process.argv.includes('--pet-test')
 const previewMode = process.argv.includes('--pet-preview') || testMode
 const isolatedPath = process.argv.find(a => a.startsWith('--pet-data='))?.slice(11)
