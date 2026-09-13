@@ -310,7 +310,12 @@ function createChatWindow() {
       .then(() => { if (!chatWin.isDestroyed()) chatWin.show() })
   }
   chatWin.once('ready-to-show', () => { state.ready = true; tryShow() })
-  chatWin.webContents.on('did-finish-load', () => { state.loaded = true; tryShow() })
+  chatWin.webContents.on('did-finish-load', () => {
+    state.loaded = true
+    // 窗口被 × 销毁后重建：回放主进程对话历史，页面与记忆保持一致（工具过程不持久化，只回放最终消息）
+    for (const m of chatHistory) chatSend('chat-msg', { role: m.role, text: m.content })
+    tryShow()
+  })
   setTimeout(() => { if (chatWin && !chatWin.isDestroyed() && !chatWin.isVisible()) chatWin.show() }, 2000)
   chatWin.on('closed', () => { chatWin = null })
   return chatWin
