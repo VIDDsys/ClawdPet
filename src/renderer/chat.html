@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Clawd AI</title>
+  <link rel="stylesheet" href="chat.css">
+</head>
+<body>
+  <header id="chat-head">
+    <div class="avatar"><img src="../assets/clawd-avatar.png" alt="Clawd"></div>
+    <div class="head-text">
+      <b>CLAWD<span class="cursor">_</span></b>
+      <span id="status"><i class="dot"></i>ready</span>
+    </div>
+    <div class="head-actions">
+      <button id="clear-btn" class="icon-btn" title="新建对话" aria-label="新建对话">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+      </button>
+      <button id="config-btn" class="icon-btn" title="模型设置" aria-label="模型设置">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
+    </div>
+  </header>
+  <main id="chat-log">
+    <div class="hello">
+      <img src="../assets/pet/wave-a.gif" alt="">
+      <p>双击小螃蟹也可以直接打开这里。<br>Enter 发送 · Shift+Enter 换行</p>
+    </div>
+  </main>
+  <footer id="chat-input-row">
+    <div class="input-shell">
+      <textarea id="chat-input" rows="1" placeholder="问点什么…"></textarea>
+      <button id="stop-btn" title="停止生成" hidden>
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+      </button>
+      <button id="send-btn" title="发送">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+      </button>
+    </div>
+  </footer>
+  <div id="config-overlay" hidden>
+    <div id="config-panel">
+      <div class="cfg-head">
+        <b>模型配置</b>
+        <button id="cfg-close" class="icon-btn" title="关闭" aria-label="关闭">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div id="cfg-list"></div>
+      <button id="cfg-add" type="button">新增模型</button>
+      <form id="cfg-form" hidden>
+        <label>名称<input id="cfg-name" placeholder="如 DeepSeek"></label>
+        <label>API 地址（OpenAI 兼容）<input id="cfg-base" placeholder="https://api.deepseek.com/v1"></label>
+        <label>模型名<input id="cfg-model" placeholder="deepseek-flash"></label>
+        <label>API Key<input id="cfg-key" type="password" placeholder="sk-…"></label>
+        <div class="cfg-actions">
+          <button type="button" id="cfg-save" class="primary">保存</button>
+          <button type="button" id="cfg-cancel">取消</button>
+        </div>
+      </form>
+      <div class="cfg-head agents-head">
+        <b>身份设定（AGENTS.md）</b>
+        <span id="agents-status" class="cfg-hint"></span>
+      </div>
+      <textarea id="agents-text" rows="6" spellcheck="false" placeholder="Clawd 的身份与性格设定（Markdown）。留空则不并入系统提示词。"></textarea>
+      <div class="cfg-actions">
+        <button type="button" id="agents-save" class="primary">保存设定</button>
+      </div>
+      <p class="cfg-hint">与程序同目录的 AGENTS.md 是同一份文件：这里改完保存即写回文件，每轮对话实时生效（上限 16KB）。</p>
+      <p class="cfg-hint">配置保存在本程序同目录的 models.json，仅存于本机，不随程序分发。</p>
+    </div>
+  </div>
+  <script src="vendor/marked.min.js"></script>
+  <script src="chat.js"></script>
+</body>
+</html>

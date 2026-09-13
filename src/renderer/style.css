@@ -1,0 +1,14 @@
+* { margin: 0; padding: 0; box-sizing: border-box; user-select: none; }
+html, body { width: 100%; height: 100%; overflow: hidden; background: transparent; font-family: Consolas, "Cascadia Mono", "Microsoft YaHei UI", monospace; }
+#stage { position: relative; width: 100%; height: 100%; overflow: hidden; }
+#pet-wrap { position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); transform-origin: 50% 100%; }
+#pet { display: block; width: auto; image-rendering: pixelated; transform-origin: 50% 100%; cursor: grab; -webkit-user-drag: none; touch-action: none; filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.25)); }
+body[data-state="drag"] #pet { cursor: grabbing; }
+
+/* GIF
+/* GIF 本身会动，落地压缩保留 */
+@keyframes land { 0% { transform: scale(1.07,.92); } 65% { transform: scale(.98,1.025); } 100% { transform: scale(1,1); } }
+#pet.st-land { animation: land .45s ease-out; }
+body.paused * { animation-play-state: paused !important; }
+body.reduced-motion #pet { animation: none; }
+body.reduced-motion #bubble { transition: opacity 130ms ease; }

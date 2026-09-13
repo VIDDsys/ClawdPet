@@ -1,0 +1,59 @@
+{
+  "name": "clawd-pet",
+  "version": "2.0.0",
+  "description": "Clawd 桌面助手（Claude Code 风格像素小螃蟹，AI 实用工具）",
+  "main": "main.js",
+  "author": "TraeWork",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "preview": "electron . --pet-preview",
+    "test": "node --test tests/*.test.js",
+    "test:electron": "electron . --pet-test --pet-preview",
+    "dist": "electron-builder --win portable --x64"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.trae.desktoppet",
+    "productName": "ClawdPet",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "lib/**/*",
+      "renderer/**/*",
+      "tools/hooker.cs",
+      "assets/pet/**/*",
+      "assets/manifest.json",
+      "assets/tray.png",
+      "assets/icon.ico",
+      "renderer/vendor/**/*",
+      "assets/clawd-avatar.png"
+    ],
+    "electronDownload": {
+      "mirror": "https://npmmirror.com/mirrors/electron/"
+    },
+    "win": {
+      "icon": "assets/icon.ico",
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "signAndEditExecutable": false,
+      "signtoolOptions": null
+    },
+    "portable": {
+      "artifactName": "ClawdPet-2.0.0.exe"
+    },
+    "afterPack": "afterPack.js"
+  }
+}
