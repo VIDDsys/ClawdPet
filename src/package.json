@@ -1,6 +1,6 @@
 {
   "name": "clawd-pet",
-  "version": "2.0.3",
+  "version": "2.0.4",
   "description": "Clawd 桌面助手（Claude Code 风格像素小螃蟹，AI 实用工具）",
   "main": "main.js",
   "author": "TraeWork",

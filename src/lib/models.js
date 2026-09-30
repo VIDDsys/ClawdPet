@@ -59,7 +59,9 @@ function sanitize(input) {
       baseUrl: String(m.baseUrl || '').trim().slice(0, 200),
       model: String(m.model || '').trim().slice(0, 100),
       // 凭据字段不做展示级截断：长令牌静默截断 = 保存成功但认证必败的隐性数据损坏
-      apiKey: String(m.apiKey || '').trim()
+      apiKey: String(m.apiKey || '').trim(),
+      // AGT-04：可选的上下文 token 预算（默认在主进程按 100k 处理，大窗口模型可调大）
+      ...(Number.isFinite(Number(m.contextTokens)) ? { contextTokens: Math.min(1000000, Math.max(8000, Math.round(Number(m.contextTokens)))) } : {})
     }
   })
   let active = obj.active

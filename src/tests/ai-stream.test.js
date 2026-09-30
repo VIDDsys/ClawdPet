@@ -161,3 +161,42 @@ test('request body carries model/messages/tools and Bearer key', async () => {
   assert.equal(s.lastBody.stream, true)
   s.close()
 })
+
+// ---------- AGT-04：token 预算与分级折叠 ----------
+const { estimateTokens, shrinkContext } = require('../lib/ai')
+
+test('estimateTokens is conservative: CJK 1/char, other ~0.35/char', () => {
+  assert.equal(estimateTokens('一二三'), 3)
+  assert.ok(Math.abs(estimateTokens('abcdef') - 6 * 0.35) < 1e-9)
+  assert.ok(estimateTokens({ a: 1 }) > 0, '非字符串输入按 JSON 估算')
+})
+
+test('shrinkContext folds tool outputs first, then old assistant text, never system or the latest reply', () => {
+  const messages = [
+    { role: 'system', content: '系统提示' },
+    { role: 'user', content: '先读文件再总结' },
+    { role: 'assistant', content: 'A'.repeat(1000), tool_calls: [{ id: 'c1', function: { name: 'read_file', arguments: '{}' } }] },
+    { role: 'tool', tool_call_id: 'c1', content: 'T'.repeat(200000) },
+    { role: 'assistant', content: '最新回复正文' }
+  ]
+  const budget = 400
+  const est = shrinkContext(messages, budget)
+  assert.ok(est <= budget, `折叠后应回到预算内，实际 ${est}`)
+  assert.ok(messages[0].content === '系统提示', 'system 不折叠')
+  assert.ok(messages[4].content === '最新回复正文', '最近一条 assistant 不折叠')
+  assert.ok(messages[3].content.startsWith('(此工具输出过长已折叠'), '工具输出先折叠')
+  assert.ok(messages[2].content.startsWith('(早期回复已折叠') || messages[2].content.length <= 600, '旧 assistant 其次折叠')
+})
+
+test('shrinkContext terminates when the budget is unreachable (no infinite refolding)', () => {
+  const messages = [
+    { role: 'system', content: 'S'.repeat(50000) },
+    { role: 'user', content: 'U'.repeat(50000) },
+    { role: 'assistant', content: 'A'.repeat(2000) },
+    { role: 'tool', tool_call_id: 'c1', content: 'T'.repeat(2000) },
+    { role: 'user', content: '最新消息' }
+  ]
+  const est = shrinkContext(messages, 100)
+  assert.ok(est > 100, '无级可折时如实返回超限估算')
+  assert.ok(est < 60000, '可折叠内容确实被压掉')
+})

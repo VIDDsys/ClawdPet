@@ -147,4 +147,36 @@ function completeStream(config, messages, onDelta, { temperature = 0.6, maxToken
   return stream
 }
 
-module.exports = { completeStream, parseEndpoint }
+module.exports = { completeStream, parseEndpoint, estimateTokens, shrinkContext }
+
+// AGT-04：上下文预算按 token 保守估算（无 tokenizer 依赖，宁紧勿溢出）：
+// CJK 字符按 1 token/字计，其余按 0.35 token/字符计（宽松 tokenizer 下也不会低估）。
+function estimateTokens(value) {
+  const s = typeof value === 'string' ? value : JSON.stringify(value ?? '')
+  let t = 0
+  for (let i = 0; i < s.length; i++) t += s.charCodeAt(i) > 0x2e80 ? 1 : 0.35
+  return t
+}
+
+// 分级折叠直到回到预算内：最早的工具输出 → 更早的 assistant 正文。
+// system 与最近对话前缀不动（保 DeepSeek 前缀缓存命中）；最近一条 assistant 不折叠。
+// 返回折叠后的估算值——仍超预算时由调用方以可解释错误拒绝发送。
+function shrinkContext(messages, budget) {
+  const total = () => messages.reduce((n, m) => n + estimateTokens(m.content || '') + (m.tool_calls ? estimateTokens(m.tool_calls) : 0), 0)
+  while (total() > budget) {
+    // 折叠产物约 450 字符：阈值必须高于它，否则预算无法满足时同一条会被反复选中（死循环）
+    const tool = messages.find(x => x.role === 'tool' && x.content.length > 600)
+    if (tool) {
+      tool.content = '(此工具输出过长已折叠，如需完整内容请重新调用工具读取)' + tool.content.slice(0, 400) + '…'
+      continue
+    }
+    const lastAssistant = messages.map(m => m.role === 'assistant').lastIndexOf(true)
+    const old = messages.find((x, i) => x.role === 'assistant' && x.content && x.content.length > 800 && i !== lastAssistant)
+    if (old) {
+      old.content = '(早期回复已折叠，完整内容上文已展示过)' + old.content.slice(0, 400) + '…'
+      continue
+    }
+    break
+  }
+  return total()
+}

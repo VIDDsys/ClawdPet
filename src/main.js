@@ -11,6 +11,7 @@ const store = require('./lib/settings')
 const ai = require('./lib/ai')
 const models = require('./lib/models')
 const { AGENT_TOOLS, validateToolCall, toolCallSummary, execToolCall } = require('./lib/agent-tools')
+const { shrinkContext } = require('./lib/ai')
 
 const WIN_W = 500, WIN_H = 400
 const testMode = process.argv.includes('--pet-test')
@@ -271,16 +272,9 @@ function activeModel() {
   const s = readModelState()
   return s.models.find(m => m.id === s.active) || null
 }
-// 上下文预算：多轮工具输出（单条最大 64KB）全量堆进 messages 会撑爆 DeepSeek 128K token
-// 上下文窗口（约 40 万字节就要开始折叠）；超预算时把最早的工具输出折叠为占位符
-// （保留开头，模型仍可按需重读文件），且只折叠中间的工具结果，system+对话前缀不动以保住缓存命中
-function shrinkToolOutputs(messages) {
-  while (JSON.stringify(messages).length > 400000) {
-    const m = messages.find(x => x.role === 'tool' && x.content.length > 400)
-    if (!m) break
-    m.content = '(此工具输出过长已折叠，如需完整内容请重新调用工具读取)' + m.content.slice(0, 400) + '…'
-  }
-}
+// AGT-04：上下文预算改为按 token 保守估算 + 分级折叠（工具输出 → 旧 assistant 正文），
+// 折叠后仍超预算则在发送前以可解释错误拒绝（128k 窗口模型默认预算 100k 留头部余量；
+// 每模型可在 models.json 用 contextTokens 覆盖）。估算与折叠逻辑在 lib/ai.js。
 async function runChatStream(epoch) {
   if (chatBusy) return
   chatBusy = true
@@ -295,9 +289,15 @@ async function runChatStream(epoch) {
       return
     }
     const messages = [{ role: 'system', content: CHAT_SYSTEM }, ...chatHistory]
+    const budget = Math.min(1000000, Math.max(8000, Number(cfg.contextTokens) || 100000))
     for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
       messages[0] = { role: 'system', content: CHAT_SYSTEM + readUserPrompt() } // 每轮实时并入 AGENTS.md
-      shrinkToolOutputs(messages)
+      const estimated = shrinkContext(messages, budget)
+      if (estimated > budget) {
+        chatSend('chat-done', { ok: false, error: `上下文过长（估算约 ${Math.round(estimated / 1000)}k token，已超过该模型预算 ${Math.round(budget / 1000)}k）。请点「新建对话」重新开始；确属长任务可在 models.json 中为该模型调大 contextTokens。`, convId })
+        send('do-action', 'error')
+        return
+      }
       currentStream = ai.completeStream(cfg, messages,
         delta => { streamPartial += delta; chatSend('chat-chunk', { delta, convId }) }, { tools: AGENT_TOOLS })
       const { content, toolCalls, finishReason } = await currentStream

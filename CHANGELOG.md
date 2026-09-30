@@ -3,6 +3,13 @@
 本项目的所有显著变更都记录在此文件中。
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.0.4] - 2026-10-01
+
+### 修复
+
+- 上下文预算改为按 token 保守估算并分级折叠（工具输出 → 旧回复正文），超限在发送前明确提示新建对话
+- models.json 支持可选 contextTokens 字段为大窗口模型调大预算
+
 ## [2.0.3] - 2026-10-01
 
 ### 修复
