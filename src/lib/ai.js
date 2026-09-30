@@ -5,13 +5,24 @@
 const https = require('https')
 const http = require('http')
 
-// baseUrl 容错解析：支持 https://host、https://host/v1、甚至贴完整 .../chat/completions
+// baseUrl 容错解析：支持 https://host、https://host/v1、甚至贴完整 .../chat/completions。
+// host 与 port 必须拆开返回——http.request 的 host 选项不认 "host:port" 整串
+// （曾致带端口 baseUrl（如本地 Ollama :11434）DNS 解析失败）。
 function parseEndpoint(baseUrl) {
   const s = String(baseUrl || '').trim().replace(/\/+$/, '')
   const m = s.match(/^(https?):\/\/([^/]+)(\/.*)?$/i)
   if (!m) return null
   const prefix = (m[3] || '').replace(/\/chat\/completions$/i, '')
-  return { secure: m[1].toLowerCase() === 'https', host: m[2], prefix }
+  const secure = m[1].toLowerCase() === 'https'
+  let host = m[2], port
+  if (host.startsWith('[')) {
+    const v6 = host.match(/^\[(.+)\](?::(\d+))?$/)
+    if (v6) { host = v6[1]; port = v6[2] ? Number(v6[2]) : undefined }
+  } else {
+    const colon = host.match(/^(.+):(\d+)$/)
+    if (colon) { host = colon[1]; port = Number(colon[2]) }
+  }
+  return { secure, host, port: port || (secure ? 443 : 80), prefix }
 }
 
 // 流式补全：onDelta(textChunk) 逐段回调，返回 { content, toolCalls, finishReason }。
@@ -29,7 +40,7 @@ function completeStream(config, messages, onDelta, { temperature = 0.6, maxToken
     const lib = ep.secure ? https : http
     const data = JSON.stringify({ model: config.model, messages, temperature, max_tokens: maxTokens, stream: true,
       ...(tools ? { tools, tool_choice: 'auto' } : {}) })
-    req = lib.request({ host: ep.host, path: ep.prefix + '/chat/completions', method: 'POST',
+    req = lib.request({ host: ep.host, port: ep.port, path: ep.prefix + '/chat/completions', method: 'POST', agent: false,
       headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) },
       timeout: 300000 }, res => {
       if (res.statusCode >= 400) {
@@ -44,40 +55,82 @@ function completeStream(config, messages, onDelta, { temperature = 0.6, maxToken
       const finish = () => {
         if (done) return
         done = true
-        const toolCalls = pendingTools.filter(Boolean).map(t => {
+        // finish_reason=length 时 arguments JSON 大概率残缺；即使碰巧仍是合法 JSON，
+        // 也不把截断流里的工具调用伪装成正常调用送进执行链（主循环另有二道校验）
+        const truncated = finishReason === 'length'
+        const toolCalls = truncated ? [] : pendingTools.filter(Boolean).map(t => {
           let args = {}
           try { args = JSON.parse(t.args || '{}') } catch { args = { _raw: t.args } }
-          return { id: t.id || ('call_' + Math.random().toString(36).slice(2, 10)), name: t.name, arguments: args, truncated: finishReason === 'length' }
+          return { id: t.id || ('call_' + Math.random().toString(36).slice(2, 10)), name: t.name, arguments: args, truncated: false }
         })
-        if (!full.trim() && !toolCalls.length) return reject(new Error('回复为空（可能被思考预算耗尽截断），请重试'))
-        resolve({ content: full, toolCalls, finishReason })
+        let content = full
+        if (truncated && pendingTools.some(Boolean)) {
+          const note = '\n\n（输出达到长度上限被截断，未完成的工具调用已丢弃，请重新完整发起）'
+          content += note
+          onDelta(note)
+        }
+        if (!content.trim() && !toolCalls.length) return reject(new Error('回复为空（可能被思考预算耗尽截断），请重试'))
+        resolve({ content, toolCalls, finishReason })
+      }
+      // SSE 事件按空行分帧：多行 data 拼接，注释行（:开头）与其他字段（event/id/retry）忽略
+      let eventLines = null
+      const handlePayload = payload => {
+        if (payload === '[DONE]') return finish()
+        try {
+          const choice = JSON.parse(payload).choices[0]
+          if (!choice) return
+          if (choice.finish_reason) finishReason = choice.finish_reason
+          const delta = choice.delta
+          if (delta?.content) { full += delta.content; onDelta(delta.content) }
+          // 工具调用按 index 分片累积：name 首片到达，arguments 逐片拼接（空值不得覆盖已捕获值）
+          if (delta?.tool_calls) for (const tc of delta.tool_calls) {
+            const i = tc.index ?? 0
+            pendingTools[i] = pendingTools[i] || { id: '', name: '', args: '' }
+            if (tc.id) pendingTools[i].id = tc.id
+            if (tc.function?.name) pendingTools[i].name += tc.function.name
+            if (tc.function?.arguments) pendingTools[i].args += tc.function.arguments
+          }
+        } catch {}
+      }
+      const dispatch = () => {
+        const lines = eventLines
+        eventLines = null
+        if (!lines) return
+        const payload = lines.join('\n').trim()
+        if (!payload) return
+        try {
+          JSON.parse(payload)
+        } catch (e) {
+          // 兼容兜底：全程用单换行分隔事件（不规范代理）时按行各自解析，不整包丢弃
+          if (lines.length > 1) { for (const l of lines) handlePayload(l.trim()); return }
+        }
+        handlePayload(payload)
+      }
+      const processLine = line => {
+        if (line === '') return dispatch()
+        if (line.startsWith(':')) return
+        if (line.startsWith('data:')) {
+          eventLines = eventLines || []
+          eventLines.push(line.slice(5).replace(/^ /, ''))
+        }
       }
       res.on('data', chunk => {
         buf += chunk
         let idx
         while ((idx = buf.indexOf('\n')) >= 0) {
-          const line = buf.slice(0, idx).trim(); buf = buf.slice(idx + 1)
-          if (!line.startsWith('data:')) continue
-          const payload = line.slice(5).trim()
-          if (payload === '[DONE]') return finish()
-          try {
-            const choice = JSON.parse(payload).choices[0]
-            if (!choice) continue
-            if (choice.finish_reason) finishReason = choice.finish_reason
-            const delta = choice.delta
-            if (delta?.content) { full += delta.content; onDelta(delta.content) }
-            // 工具调用按 index 分片累积：name 首片到达，arguments 逐片拼接（空值不得覆盖已捕获值）
-            if (delta?.tool_calls) for (const tc of delta.tool_calls) {
-              const i = tc.index ?? 0
-              pendingTools[i] = pendingTools[i] || { id: '', name: '', args: '' }
-              if (tc.id) pendingTools[i].id = tc.id
-              if (tc.function?.name) pendingTools[i].name += tc.function.name
-              if (tc.function?.arguments) pendingTools[i].args += tc.function.arguments
-            }
-          } catch {}
+          const line = buf.slice(0, idx).replace(/\r$/, '')
+          buf = buf.slice(idx + 1)
+          processLine(line)
         }
       })
-      res.on('end', finish)
+      // EOF 冲刷：部分兼容服务最后一帧不带换行、也不补空行——end 时必须把
+      // 剩余行与未分帧的半截事件处理完再收尾，否则丢最后一条（可能正是
+      // 结束状态或最后一段工具参数）
+      res.on('end', () => {
+        if (buf) processLine(buf.replace(/\r$/, ''))
+        dispatch()
+        finish()
+      })
       res.on('error', reject)
     })
     req.on('timeout', () => req.destroy(new Error('请求超时')))

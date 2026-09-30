@@ -24,9 +24,15 @@ exports.default = async function afterPack(context) {
   const exe = path.join(context.appOutDir, context.packager.appInfo.productFilename + '.exe')
   const icon = path.join(context.packager.info.projectDir, 'assets', 'icon.ico')
   const rcedit = findRcedit()
+  // 图标与版本信息是发布契约：缺关键工具时必须让构建失败，而不是带着错误图标
+  // 静默成功（BUILD-04）。确需跳过（如无图标要求的本地调试构建）显式设环境变量。
   if (!rcedit || !fs.existsSync(exe) || !fs.existsSync(icon)) {
-    console.warn('[afterPack] rcedit/icon/exe missing, skip embedding:', { rcedit, exe, icon })
-    return
+    if (process.env.CLAWD_SKIP_RCEdit === '1') {
+      console.warn('[afterPack] rcedit/icon/exe missing, skipped by CLAWD_SKIP_RCEdit=1:', { rcedit, exe, icon })
+      return
+    }
+    throw new Error('[afterPack] rcedit/icon/exe missing, refusing to produce an unbranded build: ' +
+      JSON.stringify({ rcedit, exe, icon }) + '（如确需跳过请显式设置 CLAWD_SKIP_RCEdit=1）')
   }
   const version = context.packager.appInfo.version
   await new Promise((resolve, reject) => {

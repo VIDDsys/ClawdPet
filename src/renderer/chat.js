@@ -8,14 +8,38 @@ const status = document.getElementById('status')
 const bridge = window.petChatBridge
 let streamBody = null
 
+// ---- 会话世代（UI-01）：清空后旧会话的迟到 chunk/tool/done 一律丢弃 ----
+// 事件带 convId：清空瞬间置 pending（全部丢弃），收到主进程 chat-cleared 确认后
+// 采纳新世代；窗口重建回放的历史不带 convId，始终显示。
+let conv = null, clearPending = false
+function acceptEvent(data) {
+  if (data && data.convId !== undefined) {
+    if (clearPending) return false
+    if (conv === null) conv = data.convId
+    else if (data.convId !== conv) return false
+  }
+  return true
+}
+
 // Markdown 渲染：与你网站 AI 助手同款 marked 引擎；先转义原始 HTML 防注入。
+// 协议白名单（SEC-01）在 safe-links.js：链接只允许 http(s)，其余解包成纯文本；
+// 图片只允许相对路径（与 CSP img-src 'self' 一致）。
+const SAFE_HREF = window.SafeLinks.SAFE_HREF
 function renderMd(text) {
   if (!window.marked) return document.createTextNode(text)
   const frag = document.createElement('div')
   frag.className = 'md'
   frag.innerHTML = window.marked.parse(String(text).replace(/</g, '&lt;'))
-  return frag
+  return window.SafeLinks.sanitize(frag)
 }
+// 外链不经渲染层导航（窗口已禁导航/开新窗），统一交主进程白名单后进系统浏览器
+log.addEventListener('click', e => {
+  const a = e.target.closest && e.target.closest('a[href]')
+  if (!a) return
+  e.preventDefault()
+  const href = a.getAttribute('href') || ''
+  if (SAFE_HREF.test(href)) bridge.openLink(href)
+})
 // 仅当用户本就在底部附近时才自动吸底；手动上翻阅读时不强制滚动
 function nearBottom() { return log.scrollHeight - log.scrollTop - log.clientHeight < 48 }
 function autoScroll(mutation) {
@@ -36,7 +60,8 @@ function setStatus(text) { status.textContent = text }
 // 忙碌 = 生成中：发送键原位变停止键（单按钮互斥；思考阶段无 chunk 也要能停）
 function setBusy(b) { sendBtn.hidden = b; stopBtn.hidden = !b }
 
-window.pet.on('chat-msg', data => addMsg(data.role, data.text || '', data.tag))
+window.pet.on('chat-msg', data => { if (acceptEvent(data)) addMsg(data.role, data.text || '', data.tag) })
+window.pet.on('chat-cleared', data => { conv = data?.convId ?? null; clearPending = false })
 // agent 工具卡片：读文件 / 写文件 / 执行命令（SVG 图标，不用表情符号）
 const TOOL_ICONS = {
   read_file: '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>',
@@ -44,6 +69,7 @@ const TOOL_ICONS = {
   run_command: '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>'
 }
 window.pet.on('chat-tool', data => {
+  if (!acceptEvent(data)) return
   // 工具卡片之后开启新气泡：否则多轮循环的所有文字都挤在第一轮的旧气泡里，
   // 视觉顺序变成“总结在命令卡片前面”，像还没执行一样
   if (renderTimer) { clearTimeout(renderTimer); renderTimer = null }
@@ -59,12 +85,12 @@ window.pet.on('chat-tool', data => {
   head.innerHTML = (TOOL_ICONS[data.name] || '') + '<span></span>'
   head.lastChild.textContent = ' ' + data.name + '  ' + (data.input || '')
   row.appendChild(head)
-  // 工具失败（错误前缀）：行内直接亮红色「失败」标记，不弹黑色输出块
-  const failed = /^(错误|未知工具)/.test(data.output || '')
+  // 工具失败：优先看主进程结构化 status，旧事件无 status 时按错误前缀兜底
+  const failed = data.status ? data.status !== 'ok' : /^(错误|未知工具)/.test(data.output || '')
   if (failed) {
     const fail = document.createElement('span')
     fail.className = 'tool-fail'
-    fail.textContent = '失败'
+    fail.textContent = data.status === 'cancelled' ? '已取消' : '失败'
     row.appendChild(fail)
     el.classList.add('failed')
   }
@@ -105,7 +131,10 @@ function scheduleStreamRender() {
     if (streamBody) autoScroll(() => { streamBody.innerHTML = renderMd(streamText).innerHTML })
   }, 80)
 }
-window.pet.on('chat-chunk', delta => {
+window.pet.on('chat-chunk', data => {
+  const delta = typeof data === 'string' ? data : data?.delta
+  if (typeof data === 'object' && !acceptEvent(data)) return
+  if (typeof delta !== 'string') return
   if (!streamBody) {
     setBusy(true); setStatus('thinking…')
     streamBody = addMsg('assistant', '', 'clawd')
@@ -115,6 +144,7 @@ window.pet.on('chat-chunk', delta => {
   scheduleStreamRender()
 })
 window.pet.on('chat-done', data => {
+  if (!acceptEvent(data)) return
   setBusy(false)
   if (renderTimer) { clearTimeout(renderTimer); renderTimer = null }
   if (streamBody) streamBody.innerHTML = renderMd(streamText).innerHTML // 节流兜底：完成时保证最终全文渲染
@@ -129,6 +159,7 @@ window.pet.on('chat-done', data => {
 })
 // 当前回复被打断（用户插话 / 新建对话）：收尾流式气泡并解锁输入
 window.pet.on('chat-aborted', data => {
+  if (!acceptEvent(data)) return
   if (renderTimer) { clearTimeout(renderTimer); renderTimer = null }
   if (streamBody) streamBody.innerHTML = renderMd(streamText).innerHTML // 冲刷节流残余
   if (streamBody && data.partial) {
@@ -176,6 +207,9 @@ document.getElementById('clear-btn').addEventListener('click', () => {
   streamText = ''
   setBusy(false)
   setStatus('ready')
+  // 先本地换代：清空确认到达前，旧会话一切事件直接丢弃（UI-01）
+  conv = null
+  clearPending = true
   log.innerHTML = ''
   bridge.clear()
   const hello = document.createElement('div')
@@ -188,14 +222,21 @@ input.focus()
 
 // ---- 模型配置面板（models.json：与 EXE 同目录，多档案增删改+切换启用） ----
 const overlay = document.getElementById('config-overlay')
+const panel = document.getElementById('config-panel')
 const cfgList = document.getElementById('cfg-list')
 const cfgForm = document.getElementById('cfg-form')
+const cfgSource = document.getElementById('cfg-source')
+const cfgError = document.getElementById('cfg-error')
 const cfgFields = {
   name: document.getElementById('cfg-name'), baseUrl: document.getElementById('cfg-base'),
   model: document.getElementById('cfg-model'), apiKey: document.getElementById('cfg-key')
 }
 let cfgState = { active: null, models: [] }
 let editingId = null // null=未编辑 'new'=新增 其他=编辑对应 id
+let formSavePending = false // 本次保存是否来自表单：只有表单保存成功才收起表单
+let configTrigger = null // 打开面板的触发按钮，关闭时把焦点还给它（UI-03）
+const MAX_API_KEY = 4096 // 与主进程一致：凭据字段超限显式拒绝，不做静默截断
+function showCfgError(text) { cfgError.textContent = text || ''; cfgError.hidden = !text }
 function renderCfgList() {
   cfgList.textContent = ''
   if (!cfgState.models.length) {
@@ -210,7 +251,7 @@ function renderCfgList() {
     row.className = 'cfg-row' + (m.id === cfgState.active ? ' active' : '')
     const radio = document.createElement('input')
     radio.type = 'radio'; radio.name = 'cfg-active'; radio.checked = m.id === cfgState.active
-    radio.title = '启用此模型'
+    radio.title = '启用此模型'; radio.setAttribute('aria-label', '启用 ' + m.name)
     radio.addEventListener('change', () => { cfgState.active = m.id; window.pet.modelsSave(cfgState) })
     const label = document.createElement('span')
     label.className = 'cfg-label'
@@ -249,15 +290,20 @@ document.getElementById('cfg-save').addEventListener('click', () => {
     model: cfgFields.model.value.trim(),
     apiKey: cfgFields.apiKey.value.trim()
   }
-  if (!entry.baseUrl || !entry.model || !entry.apiKey) {
-    // 标红空缺项，输入时自动清除标记——不再无声失败
+  const missing = [cfgFields.baseUrl, cfgFields.model, cfgFields.apiKey].filter(i => !i.value.trim())
+  // 凭据超长：显式拒绝并标红（不做静默截断——截断=保存成功但认证必败）
+  const keyTooLong = cfgFields.apiKey.value.trim().length > MAX_API_KEY
+  if (missing.length || keyTooLong) {
+    // 标红空缺项/超长项，输入时自动清除标记——不再无声失败
     for (const i of [cfgFields.baseUrl, cfgFields.model, cfgFields.apiKey]) {
-      const bad = !i.value.trim()
+      const bad = !i.value.trim() || (i === cfgFields.apiKey && keyTooLong)
       i.classList.toggle('cfg-invalid', bad)
       if (bad) i.addEventListener('input', () => i.classList.remove('cfg-invalid'), { once: true })
     }
+    showCfgError(keyTooLong ? `API Key 超过 ${MAX_API_KEY} 字符，请检查是否粘贴了错误内容` : '')
     return
   }
+  showCfgError('')
   for (const i of Object.values(cfgFields)) i.classList.remove('cfg-invalid')
   if (editingId === 'new') {
     cfgState.models.push(entry) // id 为空，由主进程 sanitize 生成；若当前无启用项会自动启用它
@@ -265,15 +311,46 @@ document.getElementById('cfg-save').addEventListener('click', () => {
     const i = cfgState.models.findIndex(x => x.id === editingId)
     if (i >= 0) cfgState.models[i] = { ...cfgState.models[i], ...entry }
   }
+  // 表单暂不关闭：等 models-saved 成功再关，失败时保留全部输入（CFG-01）
+  formSavePending = true
   window.pet.modelsSave(cfgState)
-  closeCfgForm()
 })
-window.pet.on('models-saved', state => { cfgState = state; renderCfgList() })
-document.getElementById('config-btn').addEventListener('click', async () => {
-  cfgState = await window.pet.modelsGet()
+window.pet.on('models-saved', data => {
+  if (data && data.ok === false) {
+    showCfgError('保存失败：' + (data.error || '未知错误') + '。表单内容已保留，可重试。')
+    return
+  }
+  const state = data && data.ok ? data.state : data
+  if (state) cfgState = state
+  showCfgError('')
+  renderCfgList()
+  if (formSavePending && !cfgForm.hidden) closeCfgForm() // 只有表单发起的保存成功才收起表单
+  formSavePending = false
+})
+function openConfigPanel() {
+  const active = document.activeElement
+  // 合成激活（aria 快捷键/程序化点击）时 activeElement 可能是 body——回退到齿轮按钮
+  configTrigger = active && active !== document.body && active.focus ? active : document.getElementById('config-btn')
   overlay.hidden = false
   closeCfgForm()
   renderCfgList()
+  document.getElementById('cfg-add').focus()
+}
+function closeConfigPanel() {
+  overlay.hidden = true
+  showCfgError('')
+  if (configTrigger && document.contains(configTrigger)) configTrigger.focus()
+  configTrigger = null
+}
+document.getElementById('config-btn').addEventListener('click', async () => {
+  const rsp = await window.pet.modelsGet()
+  cfgState = rsp?.state || { active: null, models: [] }
+  // 来源诊断（CFG-03）：显示实际读取的配置文件；发现多份有效配置时提示冲突
+  if (rsp?.sourceFile) cfgSource.textContent = '当前读取：' + rsp.sourceFile
+  else cfgSource.textContent = '未找到 models.json，保存后将创建于程序目录。'
+  if (Array.isArray(rsp?.candidates) && rsp.candidates.length > 1)
+    cfgSource.textContent += ` ⚠ 检测到 ${rsp.candidates.length} 份有效配置，仅第一份生效：` + rsp.candidates.join('；')
+  openConfigPanel()
   // AGENTS.md 每次打开面板都实时读盘，与本地文件保持同一份
   document.getElementById('agents-text').value = await window.pet.agentsGet()
   document.getElementById('agents-status').textContent = ''
@@ -283,5 +360,17 @@ document.getElementById('agents-save').addEventListener('click', async () => {
   document.getElementById('agents-text').value = saved
   document.getElementById('agents-status').textContent = '已保存 ' + new Date().toLocaleTimeString()
 })
-document.getElementById('cfg-close').addEventListener('click', () => { overlay.hidden = true })
-overlay.addEventListener('click', e => { if (e.target === overlay) overlay.hidden = true })
+document.getElementById('cfg-close').addEventListener('click', closeConfigPanel)
+overlay.addEventListener('click', e => { if (e.target === overlay) closeConfigPanel() })
+// 对话框键盘语义（UI-03）：Escape 关闭并还原焦点；Tab 在面板内循环，不落回被遮挡的聊天区
+document.addEventListener('keydown', e => {
+  if (overlay.hidden) return
+  if (e.key === 'Escape') { e.preventDefault(); closeConfigPanel(); return }
+  if (e.key !== 'Tab') return
+  const focusable = [...panel.querySelectorAll('button, input, textarea')].filter(el => !el.hidden && el.offsetParent !== null)
+  if (!focusable.length) return
+  const first = focusable[0], last = focusable[focusable.length - 1]
+  if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus() }
+  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus() }
+  else if (!panel.contains(document.activeElement)) { e.preventDefault(); first.focus() }
+})

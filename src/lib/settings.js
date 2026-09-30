@@ -14,7 +14,9 @@ function sanitize(input) {
   s.scale = [0.75, 1, 1.3].includes(obj.scale) ? obj.scale : 1
   s.hearts = Number.isFinite(obj.hearts) ? Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, Math.floor(obj.hearts))) : 0
   if (obj.lastPos && Number.isFinite(obj.lastPos.x) && Number.isFinite(obj.lastPos.y)) {
+    // mode 记录保存时是悬停还是落地：重启恢复悬停位置（PET-01）
     s.lastPos = { x: Math.round(obj.lastPos.x), y: Math.round(obj.lastPos.y) }
+    if (obj.lastPos.mode === 'hover' || obj.lastPos.mode === 'ground') s.lastPos.mode = obj.lastPos.mode
   }
   return s
 }

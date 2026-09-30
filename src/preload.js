@@ -1,7 +1,7 @@
 'use strict'
 const { contextBridge, ipcRenderer } = require('electron')
 const ALLOWED = new Set(['do-action', 'apply-settings', 'hook-key', 'motion-state', 'motion-event', 'notice', 'menu-closed',
-  'chat-chunk', 'chat-done', 'chat-msg', 'chat-aborted', 'chat-tool', 'models-saved'])
+  'chat-chunk', 'chat-done', 'chat-msg', 'chat-aborted', 'chat-tool', 'chat-cleared', 'models-saved'])
 contextBridge.exposeInMainWorld('pet', Object.freeze({
   getInit: () => ipcRenderer.invoke('get-init'),
   pressStart: () => ipcRenderer.invoke('press-start'),
@@ -29,5 +29,6 @@ contextBridge.exposeInMainWorld('pet', Object.freeze({
 contextBridge.exposeInMainWorld('petChatBridge', Object.freeze({
   send: text => ipcRenderer.send('chat-send', String(text).slice(0, 30000)),
   clear: () => ipcRenderer.send('chat-clear'),
-  stop: () => ipcRenderer.send('chat-stop')
+  stop: () => ipcRenderer.send('chat-stop'),
+  openLink: href => ipcRenderer.invoke('open-link', String(href).slice(0, 2048))
 }))

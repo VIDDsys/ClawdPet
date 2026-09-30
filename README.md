@@ -10,7 +10,7 @@
 - **微型 Agent**：聊天即 Agent，具备三个工具——`read_file` / `write_file` / `run_command`（PowerShell），支持多轮全自动调用（上限 100 轮）
 
 ![聊天窗与设置面板](docs/chat-and-settings.png)
-- **自带模型，自带钥匙**：程序内零模型零密钥；在同目录 `models.json` 里填任意 OpenAI 兼容服务（DeepSeek / GLM / Qwen / Kimi / 本地 Ollama 均可），或直接在聊天窗设置面板里图形化配置
+- **自配模型与密钥**：程序内零模型零密钥；在同目录 `models.json` 里填任意 OpenAI 兼容服务（DeepSeek / GLM / Qwen / Kimi / 本地 Ollama 均可），或直接在聊天窗设置面板里图形化配置
 - **可定制的性格**：身份设定写在同目录 `AGENTS.md`，每轮对话实时读取——改完即生效，也能在设置面板里直接编辑
 - **13 个像素动画**（302×207 紧凑画布，不遮挡桌面点击）、交互音效、三档大小、开机自启
 
@@ -37,16 +37,19 @@
 
 ## ⚠️ 安全须知
 
-聊天内的 Agent 是**全自动执行**模式：它可以读写全盘任意路径文件、执行任意 PowerShell 命令。请像对待一个拥有你账户权限的助手一样对待它——不要让它运行你不确定的指令，不要在不受信任的模型配置下使用。
+聊天内的 Agent 是**全自动执行**模式：它可以读写全盘任意路径文件、执行任意 PowerShell 命令。请像对待一个拥有你账户权限的助手一样对待它——不要让它运行你不确定的指令，不要在不受信任的模型配置下使用。点「停止」或「新建」会立即终止正在执行的命令与文件写入。
+
+`models.json` 中的 API Key 以**明文**保存在本机磁盘（便携优先的设计取舍）：程序不会上传它、也不会把它写进任何日志，但拷贝或备份程序目录（含该文件）时请自行注意，不要把带 Key 的目录发给他人。
 
 ## 从源码构建
 
 ```bash
 cd src
 npm install
-npm test                 # 38 个单元测试
-npm run test:electron    # 10 项集成测试
-npm run dist             # 产出 dist/ClawdPet-2.0.0.exe（便携单文件）
+npm test                 # 单元测试（含流式协议/工具执行/配置可靠性专项）
+npm run test:electron    # Electron 集成测试
+npm run dist             # 产出 dist/ClawdPet-<版本>.exe（便携单文件，版本随 package.json）
+npm run test:packaged    # 便携 EXE 产物冒烟（按版本定位产物，可用 DESKTOP_PET_EXE 覆盖）
 ```
 
 要求：Node.js、Python（仅素材处理时需要）。开发细节见[工程结构与开发指南](工程结构与开发指南.md)，素材规格见[素材替换与重新分发指南](素材替换与重新分发指南.md)。

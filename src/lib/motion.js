@@ -42,10 +42,12 @@ class Motion {
     this.size = { ...size }
     this.body = null
     this.x = finite(position.x, area.x + (area.width - size.width) / 2)
-    this.y = 0
+    this.y = finite(position.y, 0)
     this.vx = 0
     this.vy = 0
-    this.mode = 'ground'
+    // 恢复上次保存的姿态：hover 位置原样恢复（用户拖到空中松手即停的产品行为），
+    // ground 只取 x（y 交给 constrain 贴地，任务栏/分辨率变化后才不会卡在半空）
+    this.mode = position.mode === 'hover' ? 'hover' : 'ground'
     this.dir = -1
     this.walking = false
     this.drag = null

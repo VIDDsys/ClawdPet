@@ -1,5 +1,5 @@
 'use strict'
-const { app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain, screen, powerMonitor } = require('electron')
+const { app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain, screen, powerMonitor, shell } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const crypto = require('crypto')
@@ -10,6 +10,7 @@ const { Motion, chooseDisplay } = require('./lib/motion')
 const store = require('./lib/settings')
 const ai = require('./lib/ai')
 const models = require('./lib/models')
+const { AGENT_TOOLS, validateToolCall, toolCallSummary, execToolCall } = require('./lib/agent-tools')
 
 const WIN_W = 500, WIN_H = 400
 const testMode = process.argv.includes('--pet-test')
@@ -30,9 +31,18 @@ const validWindow = () => win && !win.isDestroyed()
 function send(channel, data) { if (validWindow() && !win.webContents.isDestroyed()) win.webContents.send(channel, data) }
 function persist() { if (!settings) return; try { store.persist(file(), settings) } catch (e) { console.error('[save]', e.message) } }
 function saveSoon() { if (!saveTimer) saveTimer = setTimeout(() => { saveTimer = null; persist() }, 1500) }
+// 位置保存与物理模式解耦（PET-01）：地面与悬停都是稳定可见状态，都保存；
+// drag 中途保存视为悬停；air（下落过渡态）不保存，等落到稳定状态后由
+// 2s 一轮的 guard 兜底保存。
 function savePosition() {
-  if (!motion || motion.mode !== 'ground' || motion.drag) return
-  const pos = { x: Math.round(motion.x), y: Math.round(motion.y) }
+  if (!motion || !motion.drag) {
+    const mode = motion.mode
+    if (mode !== 'ground' && mode !== 'hover') return
+    savePosSnapshot(mode)
+  } else savePosSnapshot('hover')
+}
+function savePosSnapshot(mode) {
+  const pos = { x: Math.round(motion.x), y: Math.round(motion.y), mode }
   if (JSON.stringify(pos) === lastSavePos) return
   lastSavePos = JSON.stringify(pos)
   settings.lastPos = pos
@@ -195,89 +205,6 @@ async function setAutoStart(on) {
 // 身份/性格等用户可改的设定在 EXE 同目录 AGENTS.md（每轮实时并入）；这里只留工具与环境的硬规则
 const CHAT_SYSTEM = '用户让你操作文件或跑命令时直接调用工具执行，无需再次征求确认，执行完简要汇报结果。输出表格时必须直接用 Markdown 管道语法（| 分隔），严禁把表格包进代码块或用空格对齐。\n\n执行环境（已确定的事实，直接依赖，不要试探）：\n- Windows 11，命令通过 Windows PowerShell 5.1 执行（powershell -NoProfile -NonInteractive）。严禁 bash/sh 语法；严禁 PS7 专有语法（?? 、?. 、三元运算符）；wmic 已移除，用 Get-CimInstance。\n- 文件工具一律 UTF-8 编码；路径优先绝对路径，相对路径会按程序工作目录自动解析。run_command 已预置 Get-Content/Set-Content/Out-File/Add-Content 编码为 UTF8，中文文件读写不乱码。write_file 支持 bom 和 lineEnding:crlf 参数——写含中文的 .ps1/.bat 用 bom:true，.bat/.reg/.ini 用 lineEnding:crlf。\n- run_command 结果末尾恒附 [exit N]（超时附已收集的部分输出）；输出超 30KB 截断（附显示/总字符统计），read_file 超 64KB 截断、二进制文件会明确提示不可读；命令默认 60 秒超时（timeout_ms 可调，上限 600000）。\n- 不确定某命令是否存在时先 Get-Command 确认，不要连续盲试。已知坑：字符串里的中文变量名要用 ${} 包裹（"第$_行"会被解析成 $行 吞字）；Start-Process 别名（notepad 等 WindowsApps）配 -PassThru 会抛异常，用绝对路径或 [Diagnostics.Process]::Start。\n工具：read_file（读文件）、write_file（写文件，父目录自动创建）、run_command（执行 PowerShell，$ 与引号原样直达，输出按 UTF-8 解码）。'
 const MAX_TOOL_ROUNDS = 100
-const AGENT_TOOLS = [
-  { type: 'function', function: { name: 'read_file', description: '读取本地文本文件内容（UTF-8，超过 64KB 截断）', parameters: { type: 'object', properties: { path: { type: 'string', description: '文件绝对路径' } }, required: ['path'] } } },
-  { type: 'function', function: { name: 'write_file', description: '写入本地文件（UTF-8，父目录不存在时自动创建）。写含中文的 .ps1/.bat 建议 bom:true lineEnding:crlf（PS5.1 无 BOM 会按 ANSI 误读）', parameters: { type: 'object', properties: { path: { type: 'string', description: '文件绝对路径' }, content: { type: 'string', description: '要写入的全部内容' }, bom: { type: 'boolean', description: '是否加 UTF-8 BOM（默认 false）' }, lineEnding: { type: 'string', enum: ['lf', 'crlf'], description: '行尾格式（默认 lf；.bat/.reg/.ini 建议 crlf）' } }, required: ['path', 'content'] } } },
-  { type: 'function', function: { name: 'run_command', description: '在 Windows 上执行 PowerShell 命令（powershell -NoProfile，输出 UTF-8，已预置 Get-Content/Set-Content/Out-File 编码为 UTF8）。返回 stdout/stderr，末尾附 [exit N]；超时会附已收集的部分输出。命令经 argv 直传，$ 与引号原样保留，支持多行脚本', parameters: { type: 'object', properties: { command: { type: 'string', description: 'PowerShell 命令或脚本块' }, cwd: { type: 'string', description: '工作目录（可选，绝对路径）' }, timeout_ms: { type: 'number', description: '超时毫秒数（可选，默认 60000，上限 600000）' } }, required: ['command'] } } }
-]
-function toolCallSummary(call) {
-  const a = call.arguments || {}
-  if (call.name === 'read_file') return String(a.path || '')
-  if (call.name === 'write_file') return String(a.path || '') + `（${String(a.content ?? '').length} 字符）`
-  if (call.name === 'run_command') return String(a.command || '')
-  return ''
-}
-async function execToolCall(call) {
-  const a = call.arguments || {}
-  // 截断时带统计（显示 X / 共 Y 字符），模型能判断丢了多少
-  const clip = (s, n) => s.length > n ? s.slice(0, n) + `\n…（已截断：显示 ${n} / 共 ${s.length} 字符，如需其余内容请缩小范围重试）` : s
-  // 默认工作目录固定为程序所在目录——从快捷方式启动时主进程 cwd 可能是 system32，
-  // 不固定的话命令行为会随启动方式漂移
-  const defaultCwd = path.dirname(models.resolveForWrite(app))
-  // 相对路径自动锚定到程序目录执行（不报错拦截），并注明解析结果让模型知情
-  const resolvePathArg = p => {
-    const s = String(p)
-    if (path.isAbsolute(s)) return { p: s, note: '' }
-    const abs = path.join(defaultCwd, s)
-    return { p: abs, note: `（相对路径 "${s}" 已按工作目录解析为 ${abs}）\n` }
-  }
-  try {
-    // 流被 token 上限截断时 arguments JSON 不完整（解析成 {_raw}）——不要拿残缺参数执行
-    if (a._raw !== undefined) return '错误：工具参数 JSON 不完整（输出被长度上限截断），请重新完整地发起该工具调用'
-    if (call.name === 'read_file') {
-      const r = resolvePathArg(a.path)
-      const buf = await fs.promises.readFile(r.p)
-      // 二进制检测（NUL 字节或大量替换符）：直接说明而不是吐乱码误导模型
-      const text = buf.toString('utf8')
-      if (buf.includes(0) || (text.match(/\uFFFD/g) || []).length > buf.length * 0.02)
-        return r.note + `二进制文件（${buf.length} 字节），本工具不支持读取内容`
-      return r.note + (clip(text, 64000) || '(空文件)')
-    }
-    if (call.name === 'write_file') {
-      const r = resolvePathArg(a.path)
-      await fs.promises.mkdir(path.dirname(r.p), { recursive: true })
-      let content = String(a.content ?? '')
-      if (a.lineEnding === 'crlf') content = content.replace(/\r?\n/g, '\r\n')
-      await fs.promises.writeFile(r.p, (a.bom ? '\ufeff' : '') + content, 'utf8')
-      return (r.note || '') + `已写入 ${r.p}（UTF-8${a.bom ? ' + BOM' : ''}，${a.lineEnding === 'crlf' ? 'CRLF' : 'LF'}）`
-    }
-    if (call.name === 'run_command') {
-      const cwd = a.cwd !== undefined ? resolvePathArg(a.cwd).p : defaultCwd
-      const timeout = Math.min(600000, Math.max(1000, Number(a.timeout_ms) || 60000))
-      return await new Promise(resolve => {
-        // PowerShell 而非 cmd：argv 直传不经 shell 二次转义（$ 和引号原样保留）、无 wmic 历史包袱；
-        // 输出强制 UTF-8，宿主对残留 GBK（老 exe）按字节智能兜底解码
-        let child
-        // execFile 的 timeout 只杀 powershell 本体，它拉起的孙进程会变孤儿继续跑——超时补刀整棵树
-        const killTree = () => { if (child?.pid) execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }, () => {}) }
-        child = execFile('powershell.exe',
-          ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command',
-            // 预置编码：控制台输出 + 常用读写命令全部 UTF8，中文文件读写不再乱码
-            '[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;' +
-            "$PSDefaultParameterValues['Get-Content:Encoding']='UTF8';" +
-            "$PSDefaultParameterValues['Set-Content:Encoding']='UTF8';" +
-            "$PSDefaultParameterValues['Add-Content:Encoding']='UTF8';" +
-            "$PSDefaultParameterValues['Out-File:Encoding']='UTF8';", String(a.command)],
-          { cwd, windowsHide: true, timeout, maxBuffer: 1024 * 1024, encoding: 'buffer' }, (e, stdout, stderr) => {
-            const decode = b => {
-              if (!b || !b.length) return ''
-              try { return new TextDecoder('utf-8', { fatal: true }).decode(b) } catch {}
-              try { return new TextDecoder('gbk').decode(b) } catch { return b.toString('utf8') }
-            }
-            let out = decode(stdout)
-            const err = decode(stderr)
-            if (err) out += (out ? '\n' : '') + '[stderr] ' + err
-            // 超时时 stdout 已是收集到的部分输出，一并返回；exit code 恒附在末尾
-            const code = e ? (e.killed ? 'timeout' : (e.code ?? 1)) : 0
-            out += (out ? '\n' : '') + `[exit ${code}]` + (e && e.killed ? '（超时被终止，以上为已收集的部分输出）' : '')
-            if (e && e.killed) killTree()
-            resolve(clip(out || '(无输出)', 30000))
-          })
-      })
-    }
-    return '未知工具: ' + call.name
-  } catch (e) { return '错误: ' + e.message }
-}
 function chatSend(channel, data) { if (chatWin && !chatWin.isDestroyed() && !chatWin.webContents.isDestroyed()) chatWin.webContents.send(channel, data) }
 // Alt+C 开关聊天窗：关闭用 hide（不销毁 DOM），再开原样恢复——绝不清空对话。
 // 只有窗口还不存在时才创建；标题栏 × 关闭走 closed 销毁，与这里互不影响。
@@ -298,6 +225,9 @@ function createChatWindow() {
   chatWin = new BrowserWindow({ width, height, x, y,
     resizable: true, backgroundColor: '#fbf9f4', title: 'Clawd AI', show: false, icon: path.join(__dirname, 'assets', 'icon.png'),
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false } })
+  // 聊天内容含模型输出的 Markdown：窗口本身绝不允许导航或开新窗（外链走 open-link 白名单进系统浏览器）
+  chatWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  chatWin.webContents.on('will-navigate', e => e.preventDefault())
   chatWin.loadFile(path.join(__dirname, 'renderer', 'chat.html'))
   // 等 DOM/CSS/图片就绪且可绘制后再显示（消除首帧 FOUC）；两个事件到达顺序不定，都满足才显示
   const state = { loaded: false, ready: false, shown: false }
@@ -321,6 +251,8 @@ function createChatWindow() {
   return chatWin
 }
 let streamEpoch = 0, currentStream = null, streamPartial = ''
+let convId = 0 // 会话世代：清空对话时 +1，所有聊天事件携带，渲染层据此丢弃旧会话的迟到事件
+let activeController = null // 当前请求的工具批次 AbortController：停止/清空/退出时真正终止命令与写入
 // 用户自定义指令：AGENTS.md 与 EXE 同目录，每轮实时重读（改完即生效，上限 16KB）
 function readUserPrompt() {
   for (const m of models.candidates(app)) {
@@ -349,16 +281,17 @@ function shrinkToolOutputs(messages) {
     m.content = '(此工具输出过长已折叠，如需完整内容请重新调用工具读取)' + m.content.slice(0, 400) + '…'
   }
 }
-async function runChatStream() {
+async function runChatStream(epoch) {
   if (chatBusy) return
   chatBusy = true
-  const epoch = ++streamEpoch
   streamPartial = ''
+  const controller = new AbortController()
+  activeController = controller
   try {
     const cfg = activeModel()
     if (!cfg) {
-      chatSend('chat-msg', { role: 'assistant', text: '还没有配置模型。点右上角设置按钮，添加一条配置（API 地址、模型名、API Key）并保存即可开始对话。配置文件 models.json 与本程序放在同一目录。', tag: 'system' })
-      chatSend('chat-done', { ok: true })
+      chatSend('chat-msg', { role: 'assistant', text: '还没有配置模型。点右上角设置按钮，添加一条配置（API 地址、模型名、API Key）并保存即可开始对话。配置文件 models.json 与本程序放在同一目录。', tag: 'system', convId })
+      chatSend('chat-done', { ok: true, convId })
       return
     }
     const messages = [{ role: 'system', content: CHAT_SYSTEM }, ...chatHistory]
@@ -366,7 +299,7 @@ async function runChatStream() {
       messages[0] = { role: 'system', content: CHAT_SYSTEM + readUserPrompt() } // 每轮实时并入 AGENTS.md
       shrinkToolOutputs(messages)
       currentStream = ai.completeStream(cfg, messages,
-        delta => { streamPartial += delta; chatSend('chat-chunk', delta) }, { tools: AGENT_TOOLS })
+        delta => { streamPartial += delta; chatSend('chat-chunk', { delta, convId }) }, { tools: AGENT_TOOLS })
       const { content, toolCalls, finishReason } = await currentStream
       currentStream = null
       if (epoch !== streamEpoch) return // 被打断（插话/停止/清空），收尾已由 interruptChatStream 完成
@@ -375,54 +308,63 @@ async function runChatStream() {
         let finalText = content || streamPartial
         if (finishReason === 'length' && !toolCalls.length) {
           finalText += '\n\n（输出达到长度上限被截断，可让我继续）'
-          chatSend('chat-chunk', '\n\n（输出达到长度上限被截断，可让我继续）')
+          chatSend('chat-chunk', { delta: '\n\n（输出达到长度上限被截断，可让我继续）', convId })
         }
         chatHistory.push({ role: 'assistant', content: finalText })
-        if (round === MAX_TOOL_ROUNDS && toolCalls.length) chatSend('chat-msg', { role: 'assistant', text: '（已达工具调用轮数上限，本轮到此为止）', tag: 'agent' })
-        chatSend('chat-done', { ok: true })
+        if (round === MAX_TOOL_ROUNDS && toolCalls.length) chatSend('chat-msg', { role: 'assistant', text: '（已达工具调用轮数上限，本轮到此为止）', tag: 'agent', convId })
+        chatSend('chat-done', { ok: true, convId })
         send('do-action', 'cheer')
         return
       }
       messages.push({ role: 'assistant', content: content || '', tool_calls: toolCalls.map(c => ({ id: c.id, type: 'function', function: { name: c.name, arguments: JSON.stringify(c.arguments) } })) })
+      const seenIds = new Set()
       for (const call of toolCalls) {
-        const output = await execToolCall(call)
+        // 执行前统一校验（AGT-02）：截断/未知工具/坏参数/重复 id 不进执行器，结构化错误回给模型重发
+        const invalid = validateToolCall(call) || (seenIds.has(call.id) ? `重复的工具调用 id（${call.id}），请为每次调用使用唯一 id` : null)
+        seenIds.add(call.id)
+        const result = invalid
+          ? { status: 'failed', output: '错误：' + invalid }
+          : await execToolCall(call, { baseDir: path.dirname(models.resolveForWrite(app)), signal: controller.signal })
         if (epoch !== streamEpoch) return
-        chatSend('chat-tool', { name: call.name, input: toolCallSummary(call), output })
-        messages.push({ role: 'tool', tool_call_id: call.id, content: String(output) })
+        chatSend('chat-tool', { name: call.name, input: toolCallSummary(call), output: result.output, status: result.status, convId })
+        messages.push({ role: 'tool', tool_call_id: call.id, content: String(result.output) })
       }
     }
   } catch (e) {
     // 中断的流由 interruptChatStream() 同步收尾；只有当前世代的真错误才上报
     if (epoch === streamEpoch) {
       currentStream = null
-      chatSend('chat-done', { ok: false, error: e.message })
+      chatSend('chat-done', { ok: false, error: e.message, convId })
       send('do-action', 'error')
     }
   } finally {
-    if (epoch === streamEpoch) chatBusy = false
+    if (epoch === streamEpoch) { chatBusy = false; activeController = null }
   }
 }
 // 中断进行中的流：interrupt = 用户插话（保留已生成部分为一条 assistant 记录）；
-// discard = 清空对话（丢弃部分输出）。新流随后的 runChatStream 会让旧回调失效。
+// discard = 清空对话（丢弃部分输出）。除了作废回调世代，还要真正终止已启动的
+// 工具副作用：run_command 杀整棵进程树、write_file 丢弃半截临时文件（AGT-01）。
 function interruptChatStream(keepPartial) {
   if (!chatBusy) return
   streamEpoch++
   if (currentStream) currentStream.abort()
   currentStream = null
+  if (activeController) activeController.abort()
   chatBusy = false
   if (keepPartial && streamPartial.trim()) {
     chatHistory.push({ role: 'assistant', content: streamPartial })
-    chatSend('chat-aborted', { partial: true })
-  } else chatSend('chat-aborted', { partial: false })
+    chatSend('chat-aborted', { partial: true, convId })
+  } else chatSend('chat-aborted', { partial: false, convId })
   streamPartial = ''
 }
 function chatUserMessage(text) {
   createChatWindow()
   if (chatBusy) interruptChatStream(true) // 插话：立即打断当前回复，接着发新消息
-  chatSend('chat-msg', { role: 'user', text })
+  const epoch = ++streamEpoch // 世代由发送方递增，用户回显与随后的流共用同一世代号
+  chatSend('chat-msg', { role: 'user', text, convId })
   chatHistory.push({ role: 'user', content: text })
   if (chatHistory.length > 40) chatHistory = chatHistory.slice(-40)
-  runChatStream()
+  runChatStream(epoch)
 }
 function menuTemplate() {
   const check = (label, key) => ({ label, type: 'checkbox', checked: settings[key], click: mi => setSetting(key, mi.checked) })
@@ -506,9 +448,27 @@ function registerIpc() {
     lastChatSend = { text, t: now }
     chatUserMessage(text)
   })
-  on('chat-clear', () => { interruptChatStream(false); chatHistory = [] })
+  // 清空：先换代并终止进行中的流与工具副作用，再清历史，最后回确认——
+  // IPC 顺序保证渲染层先收到 chat-cleared 再收到任何后续消息，旧会话迟到事件全部作废
+  on('chat-clear', () => {
+    convId++
+    interruptChatStream(false)
+    chatHistory = []
+    chatSend('chat-cleared', { convId })
+  })
   on('chat-stop', () => interruptChatStream(true))
-  handle('models-get', () => readModelState())
+  // 配置来源诊断（CFG-03）：返回实际生效文件与全部有效候选，界面据此提示多配置冲突
+  handle('models-get', () => {
+    const all = models.findAll(app)
+    return { state: all[0]?.state || models.sanitize(null), sourceFile: all[0]?.file || null,
+      candidates: all.map(x => x.file) }
+  })
+  // 外链白名单：渲染层只送 http(s)，主进程再验一次才交给系统浏览器（SEC-01）
+  handle('open-link', href => {
+    if (typeof href !== 'string' || !/^https?:\/\/[^\s"'<>]+$/i.test(href) || href.length > 2048) return { ok: false }
+    shell.openExternal(href).catch(e => console.error('[open-link]', e.message))
+    return { ok: true }
+  })
   // 身份设定编辑：与 readUserPrompt 同源同路径，GUI 与本地 AGENTS.md 永远是同一份
   handle('agents-get', () => {
     for (const m of models.candidates(app)) {
@@ -523,7 +483,8 @@ function registerIpc() {
   })
   on('models-save', state => {
     const file = models.resolveForWrite(app)
-    chatSend('models-saved', models.save(file, state))
+    try { chatSend('models-saved', { ok: true, state: models.save(file, state) }) }
+    catch (e) { chatSend('models-saved', { ok: false, error: e.message }) } // 保存失败必须可见，UI 保留表单内容
   })
   let lastHeart = -Infinity
   on('add-hearts', n => {
@@ -556,7 +517,13 @@ else {
   }).catch(e => { console.error(e); app.exit(1) })
   app.on('before-quit', () => {
     closing = true; clearInterval(tickTimer); clearInterval(guardTimer); clearTimeout(saveTimer)
-    if (motion) { motion.reset(); savePosition() }
+    // 先保存当前位置再重置物理状态：reset 会把 y 拉回地面，先 reset 再存会把悬停位置错存成落地（PET-01）
+    if (motion) { savePosition(); motion.reset() }
+    // 退出前取消进行中的流与工具：命令进程树立刻补刀，写入清理半截临时文件（AGT-01）
+    if (chatBusy) {
+      if (currentStream) currentStream.abort()
+      if (activeController) activeController.abort()
+    }
     persist()
     if (hookProc) hookProc.kill()
     globalShortcut.unregisterAll(); if (tray) tray.destroy()

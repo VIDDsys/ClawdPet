@@ -11,7 +11,7 @@
     <div class="avatar"><img src="../assets/clawd-avatar.png" alt="Clawd"></div>
     <div class="head-text">
       <b>CLAWD<span class="cursor">_</span></b>
-      <span id="status"><i class="dot"></i>ready</span>
+      <span id="status" role="status"><i class="dot"></i>ready</span>
     </div>
     <div class="head-actions">
       <button id="clear-btn" class="icon-btn" title="新建对话" aria-label="新建对话">
@@ -30,23 +30,25 @@
   </main>
   <footer id="chat-input-row">
     <div class="input-shell">
-      <textarea id="chat-input" rows="1" placeholder="问点什么…"></textarea>
-      <button id="stop-btn" title="停止生成" hidden>
+      <textarea id="chat-input" rows="1" placeholder="问点什么…" aria-label="输入消息"></textarea>
+      <button id="stop-btn" title="停止生成" aria-label="停止生成" hidden>
         <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
       </button>
-      <button id="send-btn" title="发送">
+      <button id="send-btn" title="发送" aria-label="发送">
         <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
       </button>
     </div>
   </footer>
   <div id="config-overlay" hidden>
-    <div id="config-panel">
+    <div id="config-panel" role="dialog" aria-modal="true" aria-labelledby="cfg-title">
       <div class="cfg-head">
-        <b>模型配置</b>
+        <b id="cfg-title">模型配置</b>
         <button id="cfg-close" class="icon-btn" title="关闭" aria-label="关闭">
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
         </button>
       </div>
+      <p id="cfg-source" class="cfg-hint"></p>
+      <p id="cfg-error" class="cfg-error" hidden></p>
       <div id="cfg-list"></div>
       <button id="cfg-add" type="button">新增模型</button>
       <form id="cfg-form" hidden>
@@ -68,10 +70,11 @@
         <button type="button" id="agents-save" class="primary">保存设定</button>
       </div>
       <p class="cfg-hint">与程序同目录的 AGENTS.md 是同一份文件：这里改完保存即写回文件，每轮对话实时生效（上限 16KB）。</p>
-      <p class="cfg-hint">配置保存在本程序同目录的 models.json，仅存于本机，不随程序分发。</p>
+      <p class="cfg-hint">配置保存在本程序同目录的 models.json，仅存于本机，不随程序分发。API Key 以明文保存在该文件中：拷贝/备份程序目录时请自行注意，程序不会上传或把它写进任何日志。</p>
     </div>
   </div>
   <script src="vendor/marked.min.js"></script>
+  <script src="safe-links.js"></script>
   <script src="chat.js"></script>
 </body>
 </html>

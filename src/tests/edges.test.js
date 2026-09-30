@@ -95,11 +95,12 @@ test('completeStream rejects cleanly when unconfigured', async () => {
   await assert.rejects(ai.completeStream({}, [{ role: 'user', content: 'hi' }], () => {}), /未配置模型/)
   await assert.rejects(ai.completeStream({ baseUrl: 'https://x.example', model: '', apiKey: 'k' }, [], () => {}), /未配置模型/)
 })
-test('parseEndpoint tolerates host-only, /v1 and full endpoint URLs', () => {
+test('parseEndpoint tolerates host-only, /v1, ports and full endpoint URLs', () => {
   const { parseEndpoint } = require('../lib/ai')
-  assert.deepEqual(parseEndpoint('https://api.deepseek.com'), { secure: true, host: 'api.deepseek.com', prefix: '' })
-  assert.deepEqual(parseEndpoint('https://api.deepseek.com/v1/'), { secure: true, host: 'api.deepseek.com', prefix: '/v1' })
-  assert.deepEqual(parseEndpoint('http://127.0.0.1:11434/v1/chat/completions'), { secure: false, host: '127.0.0.1:11434', prefix: '/v1' })
+  assert.deepEqual(parseEndpoint('https://api.deepseek.com'), { secure: true, host: 'api.deepseek.com', port: 443, prefix: '' })
+  assert.deepEqual(parseEndpoint('https://api.deepseek.com/v1/'), { secure: true, host: 'api.deepseek.com', port: 443, prefix: '/v1' })
+  assert.deepEqual(parseEndpoint('http://127.0.0.1:11434/v1/chat/completions'), { secure: false, host: '127.0.0.1', port: 11434, prefix: '/v1' })
+  assert.deepEqual(parseEndpoint('http://[::1]:8080/v1'), { secure: false, host: '::1', port: 8080, prefix: '/v1' })
   assert.equal(parseEndpoint('not a url'), null)
 })
 test('models.sanitize generates ids, repairs active and filters garbage', () => {
